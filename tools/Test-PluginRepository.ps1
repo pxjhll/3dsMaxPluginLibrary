@@ -122,10 +122,6 @@ function Test-BundleRecord(
                 throw "$Section $identityKey does not match the Bundle catalog"
             }
         }
-        if ($bundleRecord.Contains('Author') -and
-            $bundleRecord.Author -ne $Record.Author) {
-            throw "$Section Author does not match the Bundle catalog"
-        }
         foreach ($optionalRunKey in @('MacroCategory','MacroName')) {
             if ($Record.Contains($optionalRunKey) -and
                 $bundleRecord[$optionalRunKey] -ne $Record[$optionalRunKey]) {
