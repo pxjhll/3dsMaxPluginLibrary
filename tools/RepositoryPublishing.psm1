@@ -1,6 +1,51 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-CpmRepositoryPolicy {
+    param(
+        [string]$Path = (Join-Path $PSScriptRoot 'repository-policy.json')
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Repository policy is missing: $Path"
+    }
+    $policy = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($requiredProperty in @(
+        'SchemaVersion',
+        'ManagerPluginId',
+        'AllowedTags',
+        'SourceRepositoryDirectoryName',
+        'PublishedRepositoryDirectoryName',
+        'ChildPackageDirectory',
+        'ManagerPackageDirectory',
+        'ChildRepositoryName',
+        'ManagerRepositoryName'
+    )) {
+        if ($null -eq $policy.PSObject.Properties[$requiredProperty]) {
+            throw "Repository policy is missing $requiredProperty"
+        }
+    }
+    if ([int]$policy.SchemaVersion -ne 1) {
+        throw "Unsupported repository policy schema: $($policy.SchemaVersion)"
+    }
+    if (@($policy.AllowedTags).Count -lt 1) {
+        throw 'Repository policy must allow at least one tag.'
+    }
+    foreach ($directoryName in @(
+        $policy.SourceRepositoryDirectoryName,
+        $policy.PublishedRepositoryDirectoryName,
+        $policy.ChildPackageDirectory,
+        $policy.ManagerPackageDirectory
+    )) {
+        if ([string]::IsNullOrWhiteSpace($directoryName) -or
+            $directoryName -match '[\\/]' -or
+            $directoryName -in @('.', '..')) {
+            throw "Repository policy contains an unsafe directory name: $directoryName"
+        }
+    }
+    return $policy
+}
+
 function ConvertFrom-CpmIniLines {
     param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
 
@@ -240,7 +285,7 @@ function Resolve-CpmRepositoryFile {
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][string]$RelativePath,
-        [Parameter(Mandatory)][ValidateSet('packages','manager')][string]$RequiredFolder,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$RequiredFolder,
         [switch]$MustExist
     )
 
@@ -271,7 +316,7 @@ function Copy-CpmImmutablePackage {
         [Parameter(Mandatory)][string]$SourceRoot,
         [Parameter(Mandatory)][string]$TargetRoot,
         [Parameter(Mandatory)][Collections.IDictionary]$Record,
-        [Parameter(Mandatory)][ValidateSet('packages','manager')][string]$RequiredFolder
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$RequiredFolder
     )
 
     $sourcePath = Resolve-CpmRepositoryFile `
@@ -350,6 +395,7 @@ Export-ModuleMember -Function @(
     'Copy-CpmIniData',
     'Get-CpmPluginEntries',
     'Get-CpmPublishRecords',
+    'Get-CpmRepositoryPolicy',
     'New-CpmBackupDirectory',
     'New-CpmCatalogCandidate',
     'Read-CpmIniFile',

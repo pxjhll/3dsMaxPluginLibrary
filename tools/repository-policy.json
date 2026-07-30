@@ -1,0 +1,16 @@
+{
+  "SchemaVersion": 1,
+  "ManagerPluginId": "companypluginmanager",
+  "AllowedTags": [
+    "建模",
+    "蒙皮",
+    "动作",
+    "检查"
+  ],
+  "SourceRepositoryDirectoryName": "bundle-repository",
+  "PublishedRepositoryDirectoryName": "3dsMaxPluginLibrary",
+  "ChildPackageDirectory": "packages",
+  "ManagerPackageDirectory": "manager",
+  "ChildRepositoryName": "Company 3ds Max Bundle Plugins",
+  "ManagerRepositoryName": "Company Plugin Manager Updates"
+}

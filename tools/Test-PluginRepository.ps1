@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+Import-Module (Join-Path $PSScriptRoot 'RepositoryPublishing.psm1') -Force
+$policy = Get-CpmRepositoryPolicy
 
 $root = [IO.Path]::GetFullPath($RepositoryPath).TrimEnd('\')
 if (-not (Test-Path -LiteralPath $root -PathType Container)) {
@@ -91,7 +93,12 @@ function Test-BundleRecord(
     if ($Record.Sha256 -notmatch '^[0-9a-f]{64}$') {
         throw "$Section Sha256 must contain exactly 64 lowercase hexadecimal characters"
     }
-    $requiredPackagePrefix = if ($Channel -eq 'Manager') { 'manager/' } else { 'packages/' }
+    $requiredPackagePrefix = if ($Channel -eq 'Manager') {
+        "$($policy.ManagerPackageDirectory)/"
+    }
+    else {
+        "$($policy.ChildPackageDirectory)/"
+    }
     if (-not $Record.Package.StartsWith(
         $requiredPackagePrefix,
         [StringComparison]::OrdinalIgnoreCase
@@ -107,12 +114,12 @@ function Test-BundleRecord(
         if (-not $Record.Contains('Tags') -or [string]::IsNullOrWhiteSpace($Record.Tags)) {
             throw "$Section is missing Tags"
         }
-        $allowedTags = @('建模','蒙皮','动作','检查')
+        $allowedTags = @($policy.AllowedTags)
         $tags = @($Record.Tags -split '\|' | ForEach-Object { $_.Trim() })
         if ($tags.Count -eq 0 -or @($tags | Where-Object {
             [string]::IsNullOrWhiteSpace($_) -or $_ -notin $allowedTags
         }).Count -ne 0) {
-            throw "$Section Tags must use 建模|蒙皮|动作|检查 separated by |"
+            throw "$Section Tags must use repository-policy.json values separated by |"
         }
         if (($tags | Select-Object -Unique).Count -ne $tags.Count) {
             throw "$Section contains duplicate Tags"
@@ -218,7 +225,7 @@ if ($pluginSections.Count -lt 1) {
     throw 'catalog.ini contains no child plug-ins'
 }
 if (@($pluginSections | Where-Object {
-    $catalogSections[$_].Id -eq 'companypluginmanager'
+    $catalogSections[$_].Id -eq $policy.ManagerPluginId
 }).Count -ne 0) {
     throw 'The manager must not be published in catalog.ini'
 }
@@ -246,8 +253,8 @@ if ($managerPluginSections.Count -ne 1) {
 }
 $managerSection = $managerPluginSections[0]
 $managerRecord = $managerSections[$managerSection]
-if ($managerRecord.Id -ne 'companypluginmanager') {
-    throw 'manager.ini must contain only companypluginmanager'
+if ($managerRecord.Id -ne $policy.ManagerPluginId) {
+    throw "manager.ini must contain only $($policy.ManagerPluginId)"
 }
 Test-BundleRecord $managerSection $managerRecord Manager
 if ($upgradeCodes.ContainsKey($managerRecord.UpgradeCode)) {

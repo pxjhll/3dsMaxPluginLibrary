@@ -9,6 +9,7 @@ $toolsRoot = Split-Path $PSScriptRoot -Parent
 $companyPublisher = Join-Path $toolsRoot 'Publish-CompanyDirect.ps1'
 $githubPublisher = Join-Path $toolsRoot 'Publish-GitHub.ps1'
 $validator = Join-Path $toolsRoot 'Test-PluginRepository.ps1'
+Import-Module (Join-Path $toolsRoot 'RepositoryPublishing.psm1') -Force
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $tempRoot = Join-Path $tempBase ('cpm-publishing-test-' + [guid]::NewGuid().ToString('N'))
@@ -40,6 +41,16 @@ function Assert-Equal {
 try {
     Copy-RepositoryContent -Source $sourceRoot -Destination $testSource
     Copy-RepositoryContent -Source $sourceRoot -Destination $companyRepo
+    $sourceCatalog = Read-CpmIniFile -Path (Join-Path $testSource 'catalog.ini')
+    $sourceEntries = Get-CpmPluginEntries -Catalog $sourceCatalog
+    $testPluginIds = @($sourceEntries.Keys)
+    if ($testPluginIds.Count -lt 2) {
+        throw 'Publishing workflow tests require at least two child plug-ins.'
+    }
+    $primaryPluginId = $testPluginIds[0]
+    $secondaryPluginId = $testPluginIds[1]
+    $primaryRecord = $sourceEntries[$primaryPluginId].Record
+    $secondaryRecord = $sourceEntries[$secondaryPluginId].Record
 
     New-Item -ItemType Directory -Path $gitRepo -Force | Out-Null
     & git -C $gitRepo init -b main | Out-Null
@@ -61,7 +72,7 @@ try {
     & $companyPublisher `
         -SourceRepository $testSource `
         -CompanyRepository $companyRepo `
-        -RemovePluginIds 'jx-qachar' `
+        -RemovePluginIds $primaryPluginId `
         -BackupRoot $backupRoot
     & $validator -RepositoryPath $companyRepo
 
@@ -69,15 +80,17 @@ try {
     Assert-Equal $remoteBeforeCompany $remoteAfterCompany (
         'Internal publication unexpectedly changed the Git remote'
     )
-    if (Select-String -LiteralPath (Join-Path $companyRepo 'catalog.ini') -SimpleMatch 'Id=jx-qachar') {
-        throw 'Internal downlisting did not remove jx-qachar.'
+    if (Select-String `
+        -LiteralPath (Join-Path $companyRepo 'catalog.ini') `
+        -SimpleMatch "Id=$primaryPluginId") {
+        throw "Internal downlisting did not remove $primaryPluginId."
     }
 
-    $qaRelativePath = 'packages\JX_QAChar_v1.0.2.bundle.zip'
-    $qaCompanyPackage = Join-Path $companyRepo $qaRelativePath
+    $primaryRelativePath = $primaryRecord.Package -replace '/', '\'
+    $primaryCompanyPackage = Join-Path $companyRepo $primaryRelativePath
     Copy-Item `
-        -LiteralPath (Join-Path $testSource 'packages\JXTools_PearlCurveCards_v2.0.0.bundle.zip') `
-        -Destination $qaCompanyPackage `
+        -LiteralPath (Join-Path $testSource ($secondaryRecord.Package -replace '/', '\')) `
+        -Destination $primaryCompanyPackage `
         -Force
     $catalogBeforeRejectedPublish = (
         Get-FileHash -LiteralPath (Join-Path $companyRepo 'catalog.ini') -Algorithm SHA256
@@ -87,7 +100,7 @@ try {
         & $companyPublisher `
             -SourceRepository $testSource `
             -CompanyRepository $companyRepo `
-            -PluginIds 'jx-qachar' `
+            -PluginIds $primaryPluginId `
             -BackupRoot $backupRoot
     }
     catch {
@@ -103,19 +116,27 @@ try {
         'Rejected internal publication changed catalog.ini'
     )
 
-    Remove-Item -LiteralPath $qaCompanyPackage -Force
+    Remove-Item -LiteralPath $primaryCompanyPackage -Force
     & $companyPublisher `
         -SourceRepository $testSource `
         -CompanyRepository $companyRepo `
-        -PluginIds 'jx-qachar' `
+        -PluginIds $primaryPluginId `
         -BackupRoot $backupRoot
     & $validator -RepositoryPath $companyRepo
-    if (-not (Test-Path -LiteralPath $qaCompanyPackage -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $primaryCompanyPackage -PathType Leaf)) {
         throw 'Internal publisher did not copy a missing selected package.'
     }
-    $sourceQaHash = (Get-FileHash -LiteralPath (Join-Path $testSource $qaRelativePath) -Algorithm SHA256).Hash
-    $companyQaHash = (Get-FileHash -LiteralPath $qaCompanyPackage -Algorithm SHA256).Hash
-    Assert-Equal $sourceQaHash $companyQaHash 'Internal copied package hash differs from source'
+    $sourcePrimaryHash = (
+        Get-FileHash `
+            -LiteralPath (Join-Path $testSource $primaryRelativePath) `
+            -Algorithm SHA256
+    ).Hash
+    $companyPrimaryHash = (
+        Get-FileHash -LiteralPath $primaryCompanyPackage -Algorithm SHA256
+    ).Hash
+    Assert-Equal $sourcePrimaryHash $companyPrimaryHash (
+        'Internal copied package hash differs from source'
+    )
 
     $companyCatalogHash = (
         Get-FileHash -LiteralPath (Join-Path $companyRepo 'catalog.ini') -Algorithm SHA256
@@ -125,13 +146,15 @@ try {
         -CommitMessage 'Test external downlisting' `
         -SourceRepository $testSource `
         -GitRepository $gitRepo `
-        -RemovePluginIds 'skin-processing-tool' `
+        -RemovePluginIds $secondaryPluginId `
         -Remote origin `
         -Branch main `
         -BackupRoot $backupRoot
 
-    if (Select-String -LiteralPath (Join-Path $gitRepo 'catalog.ini') -SimpleMatch 'Id=skin-processing-tool') {
-        throw 'GitHub downlisting did not remove skin-processing-tool.'
+    if (Select-String `
+        -LiteralPath (Join-Path $gitRepo 'catalog.ini') `
+        -SimpleMatch "Id=$secondaryPluginId") {
+        throw "GitHub downlisting did not remove $secondaryPluginId."
     }
     $companyCatalogHashAfterGitHub = (
         Get-FileHash -LiteralPath (Join-Path $companyRepo 'catalog.ini') -Algorithm SHA256
@@ -145,8 +168,8 @@ try {
         throw 'GitHub publication did not advance the test remote.'
     }
 
-    $skinRelativePath = 'packages/SkinProcessingTool_v1.1.1.bundle.zip'
-    & git -C $gitRepo rm -- $skinRelativePath | Out-Null
+    $secondaryRelativePath = $secondaryRecord.Package -replace '\\','/'
+    & git -C $gitRepo rm -- $secondaryRelativePath | Out-Null
     & git -C $gitRepo commit -m 'Test setup: remove unreferenced historical package' | Out-Null
     & git -C $gitRepo push origin main | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not prepare missing-package GitHub test.' }
@@ -155,18 +178,24 @@ try {
         -CommitMessage 'Test external selected publication' `
         -SourceRepository $testSource `
         -GitRepository $gitRepo `
-        -PluginIds 'skin-processing-tool' `
+        -PluginIds $secondaryPluginId `
         -Remote origin `
         -Branch main `
         -BackupRoot $backupRoot
     & $validator -RepositoryPath $gitRepo
-    $sourceSkinHash = (
-        Get-FileHash -LiteralPath (Join-Path $testSource ($skinRelativePath -replace '/','\')) -Algorithm SHA256
+    $sourceSecondaryHash = (
+        Get-FileHash `
+            -LiteralPath (Join-Path $testSource ($secondaryRelativePath -replace '/','\')) `
+            -Algorithm SHA256
     ).Hash
-    $gitSkinHash = (
-        Get-FileHash -LiteralPath (Join-Path $gitRepo ($skinRelativePath -replace '/','\')) -Algorithm SHA256
+    $gitSecondaryHash = (
+        Get-FileHash `
+            -LiteralPath (Join-Path $gitRepo ($secondaryRelativePath -replace '/','\')) `
+            -Algorithm SHA256
     ).Hash
-    Assert-Equal $sourceSkinHash $gitSkinHash 'GitHub copied package hash differs from source'
+    Assert-Equal $sourceSecondaryHash $gitSecondaryHash (
+        'GitHub copied package hash differs from source'
+    )
     $companyCatalogHashAfterGitHubRepublish = (
         Get-FileHash -LiteralPath (Join-Path $companyRepo 'catalog.ini') -Algorithm SHA256
     ).Hash

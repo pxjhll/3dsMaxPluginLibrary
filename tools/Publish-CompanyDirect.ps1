@@ -11,6 +11,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'RepositoryPublishing.psm1') -Force
+$policy = Get-CpmRepositoryPolicy
 
 Assert-CpmSelection `
     -PluginIds $PluginIds `
@@ -22,11 +23,11 @@ $sourceRoot = [IO.Path]::GetFullPath($SourceRepository).TrimEnd('\')
 $companyRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
     $CompanyRepository
 ).TrimEnd('\')
-if ((Split-Path $sourceRoot -Leaf) -ne 'bundle-repository' -or
+if ((Split-Path $sourceRoot -Leaf) -ne $policy.SourceRepositoryDirectoryName -or
     -not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
     throw "Unsafe or missing source repository: $sourceRoot"
 }
-if ((Split-Path $companyRoot -Leaf) -ne '3dsMaxPluginLibrary' -or
+if ((Split-Path $companyRoot -Leaf) -ne $policy.PublishedRepositoryDirectoryName -or
     -not (Test-Path -LiteralPath $companyRoot -PathType Container)) {
     throw "Unsafe or missing company repository: $companyRoot"
 }
@@ -59,10 +60,10 @@ if ($PublishManager) {
     $sourceManager = Read-CpmIniFile (Join-Path $sourceRoot 'manager.ini')
     $managerEntries = Get-CpmPluginEntries -Catalog $sourceManager
     if ($managerEntries.Count -ne 1 -or
-        -not $managerEntries.Contains('companypluginmanager')) {
-        throw 'Source manager.ini must contain only companypluginmanager.'
+        -not $managerEntries.Contains($policy.ManagerPluginId)) {
+        throw "Source manager.ini must contain only $($policy.ManagerPluginId)."
     }
-    $managerRecords = @($managerEntries['companypluginmanager'].Record)
+    $managerRecords = @($managerEntries[$policy.ManagerPluginId].Record)
 }
 
 $summary = @(
@@ -89,14 +90,14 @@ foreach ($record in $pluginRecords) {
         -SourceRoot $sourceRoot `
         -TargetRoot $companyRoot `
         -Record $record `
-        -RequiredFolder packages))
+        -RequiredFolder $policy.ChildPackageDirectory))
 }
 foreach ($record in $managerRecords) {
     $copiedPackages.Add((Copy-CpmImmutablePackage `
         -SourceRoot $sourceRoot `
         -TargetRoot $companyRoot `
         -Record $record `
-        -RequiredFolder manager))
+        -RequiredFolder $policy.ManagerPackageDirectory))
 }
 
 try {

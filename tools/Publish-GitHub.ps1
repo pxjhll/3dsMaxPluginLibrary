@@ -17,6 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'RepositoryPublishing.psm1') -Force
+$policy = Get-CpmRepositoryPolicy
 
 Assert-CpmSelection `
     -PluginIds $PluginIds `
@@ -31,7 +32,7 @@ foreach ($localPath in @($sourceRoot, $repo, [IO.Path]::GetFullPath($BackupRoot)
         throw "GitHub publishing accepts local paths only: $localPath"
     }
 }
-if ((Split-Path $sourceRoot -Leaf) -ne 'bundle-repository' -or
+if ((Split-Path $sourceRoot -Leaf) -ne $policy.SourceRepositoryDirectoryName -or
     -not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
     throw "Unsafe or missing source repository: $sourceRoot"
 }
@@ -84,10 +85,10 @@ if ($PublishManager) {
     $sourceManager = Read-CpmIniFile (Join-Path $sourceRoot 'manager.ini')
     $managerEntries = Get-CpmPluginEntries -Catalog $sourceManager
     if ($managerEntries.Count -ne 1 -or
-        -not $managerEntries.Contains('companypluginmanager')) {
-        throw 'Source manager.ini must contain only companypluginmanager.'
+        -not $managerEntries.Contains($policy.ManagerPluginId)) {
+        throw "Source manager.ini must contain only $($policy.ManagerPluginId)."
     }
-    $managerRecords = @($managerEntries['companypluginmanager'].Record)
+    $managerRecords = @($managerEntries[$policy.ManagerPluginId].Record)
 }
 
 $backupDirectory = New-CpmBackupDirectory -BackupRoot $BackupRoot -Channel github
@@ -108,7 +109,7 @@ try {
             -SourceRoot $sourceRoot `
             -TargetRoot $repo `
             -Record $record `
-            -RequiredFolder packages
+            -RequiredFolder $policy.ChildPackageDirectory
         $copiedPackages.Add($result)
         $allowedPaths.Add($result.RelativePath)
     }
@@ -117,7 +118,7 @@ try {
             -SourceRoot $sourceRoot `
             -TargetRoot $repo `
             -Record $record `
-            -RequiredFolder manager
+            -RequiredFolder $policy.ManagerPackageDirectory
         $copiedPackages.Add($result)
         $allowedPaths.Add($result.RelativePath)
     }

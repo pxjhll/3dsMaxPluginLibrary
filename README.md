@@ -30,6 +30,7 @@ packages/       子插件版本化 Bundle ZIP
 manager.ini     插件管理器独立更新清单
 manager/        插件管理器版本化 Bundle ZIP
 tools/          双通道发布、校验和回归测试脚本
+tools/repository-policy.json  管理器 ID、标签及仓库目录策略
 ```
 
 同一个版本号对应的 ZIP 内容必须保持不变。内容变化时必须提升插件版本，
@@ -51,8 +52,8 @@ tools/          双通道发布、校验和回归测试脚本
 
 ```powershell
 .\tools\Publish-GitHub.ps1 `
-  -CommitMessage "Publish jx-qachar v1.0.3" `
-  -PluginIds "jx-qachar"
+  -CommitMessage "Publish <plugin-id> v1.0.0" `
+  -PluginIds "<plugin-id>"
 ```
 
 发布管理器：
@@ -80,7 +81,7 @@ tools/          双通道发布、校验和回归测试脚本
 
 ```powershell
 .\tools\Publish-CompanyDirect.ps1 `
-  -PluginIds "jx-qachar"
+  -PluginIds "<plugin-id>"
 ```
 
 默认公司仓库：
@@ -102,6 +103,25 @@ tools/          双通道发布、校验和回归测试脚本
 - `-PublishFullCatalog`：完整替换子插件清单，不能与前两项组合。
 
 每次至少指定一种动作。`PluginIds` 与 `RemovePluginIds` 不能包含同一个 ID。
+
+## 工程发现
+
+根构建器不保存子插件列表。每个插件工程使用 `repository.publish.json`
+声明是否进入仓库构建：
+
+```json
+{
+  "SchemaVersion": 1,
+  "Enabled": true,
+  "Channel": "child",
+  "Order": 1000,
+  "Author": "作者",
+  "Tags": ["建模"]
+}
+```
+
+`Enabled=false` 的测试版或已下架工程不会被构建。允许标签统一由
+`tools/repository-policy.json` 管理。
 
 ## 回归测试
 
