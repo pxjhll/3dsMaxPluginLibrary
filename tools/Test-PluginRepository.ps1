@@ -17,11 +17,18 @@ function ConvertFrom-IniLines([string[]]$Lines) {
     foreach ($line in $Lines) {
         $trimmed = $line.Trim()
         if ($trimmed -match '^\[(.+)\]$') {
-            $sectionName = $Matches[1]
+            $sectionName = $Matches[1].Trim()
+            if ($sections.Contains($sectionName)) {
+                throw "Duplicate INI section: $sectionName"
+            }
             $sections[$sectionName] = [ordered]@{}
         }
         elseif ($sectionName -ne '' -and $trimmed -match '^([^=]+)=(.*)$') {
-            $sections[$sectionName][$Matches[1].Trim()] = $Matches[2].Trim()
+            $key = $Matches[1].Trim()
+            if ($sections[$sectionName].Contains($key)) {
+                throw "Duplicate INI key: [$sectionName] $key"
+            }
+            $sections[$sectionName][$key] = $Matches[2].Trim()
         }
     }
     return $sections
@@ -35,6 +42,10 @@ function Read-IniSections([string]$Path) {
 }
 
 function Resolve-RepositoryPackage([string]$RelativePath) {
+    if ([IO.Path]::IsPathRooted($RelativePath) -or
+        $RelativePath -match '(^|[\\/])\.\.([\\/]|$)') {
+        throw "Package path must be repository-relative: $RelativePath"
+    }
     $packagePath = [IO.Path]::GetFullPath(
         (Join-Path $root ($RelativePath -replace '/', '\'))
     )
@@ -49,7 +60,9 @@ function Resolve-RepositoryPackage([string]$RelativePath) {
 
 function Test-BundleRecord(
     [string]$Section,
-    [Collections.IDictionary]$Record
+    [Collections.IDictionary]$Record,
+    [ValidateSet('Child','Manager')]
+    [string]$Channel
 ) {
     foreach ($requiredKey in @(
         'Id','Name','Version','Type','Package','BundleName',
@@ -63,8 +76,47 @@ function Test-BundleRecord(
     if ($Record.Type -ne 'bundle') {
         throw "$Section is not Type=bundle"
     }
+    if ($Record.Id -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') {
+        throw "$Section Id must use lowercase letters, digits, and hyphens"
+    }
+    if ($Section -ne "Plugin.$($Record.Id)") {
+        throw "$Section name must match Id: Plugin.$($Record.Id)"
+    }
     if ($Record.Version -notmatch '^\d+\.\d+\.\d+$') {
         throw "$Section Version must use x.y.z format"
+    }
+    if ($Record.BundleName -notmatch '^[^\\/]+\.bundle$') {
+        throw "$Section BundleName must be one .bundle directory name"
+    }
+    if ($Record.Sha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "$Section Sha256 must contain exactly 64 lowercase hexadecimal characters"
+    }
+    $requiredPackagePrefix = if ($Channel -eq 'Manager') { 'manager/' } else { 'packages/' }
+    if (-not $Record.Package.StartsWith(
+        $requiredPackagePrefix,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "$Section Package must be inside $requiredPackagePrefix"
+    }
+    if ($Record.Package -notmatch (
+        [regex]::Escape("_v$($Record.Version).bundle.zip") + '$'
+    )) {
+        throw "$Section Package filename must include catalog Version"
+    }
+    if ($Channel -eq 'Child') {
+        if (-not $Record.Contains('Tags') -or [string]::IsNullOrWhiteSpace($Record.Tags)) {
+            throw "$Section is missing Tags"
+        }
+        $allowedTags = @('建模','蒙皮','动作','检查')
+        $tags = @($Record.Tags -split '\|' | ForEach-Object { $_.Trim() })
+        if ($tags.Count -eq 0 -or @($tags | Where-Object {
+            [string]::IsNullOrWhiteSpace($_) -or $_ -notin $allowedTags
+        }).Count -ne 0) {
+            throw "$Section Tags must use 建模|蒙皮|动作|检查 separated by |"
+        }
+        if (($tags | Select-Object -Unique).Count -ne $tags.Count) {
+            throw "$Section contains duplicate Tags"
+        }
     }
     try {
         [void][Guid]::Parse($Record.UpgradeCode)
@@ -75,7 +127,7 @@ function Test-BundleRecord(
 
     $packagePath = Resolve-RepositoryPackage $Record.Package
     $actualHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualHash -ne $Record.Sha256.ToLowerInvariant()) {
+    if ($actualHash -ne $Record.Sha256) {
         throw "$Section SHA-256 mismatch"
     }
 
@@ -85,6 +137,13 @@ function Test-BundleRecord(
         $catalogEntry = $archive.GetEntry("$($Record.BundleName)/Contents/catalog.ini")
         if ($null -eq $xmlEntry -or $null -eq $catalogEntry) {
             throw "$Section Bundle root is incomplete"
+        }
+        $forbiddenEntries = @($archive.Entries | Where-Object {
+            $leaf = [IO.Path]::GetFileName($_.FullName)
+            $leaf -match '^(install|uninstall)\.ms$' -or $leaf -match '\.mzp$'
+        })
+        if ($forbiddenEntries.Count -ne 0) {
+            throw "$Section Bundle contains obsolete installer content: $($forbiddenEntries[0].FullName)"
         }
         $reader = [IO.StreamReader]::new($xmlEntry.Open(), [Text.Encoding]::UTF8, $true)
         try {
@@ -116,7 +175,7 @@ function Test-BundleRecord(
         $bundleRecord = $bundleCatalog[$bundlePluginSections[0]]
         foreach ($identityKey in @(
             'Id','Name','Version','Type','BundleName','UpgradeCode',
-            'Log'
+            'MinMaxVersion','MaxMaxVersion','Log'
         )) {
             if ($bundleRecord[$identityKey] -ne $Record[$identityKey]) {
                 throw "$Section $identityKey does not match the Bundle catalog"
@@ -165,9 +224,15 @@ if (@($pluginSections | Where-Object {
 }
 
 $upgradeCodes = @{}
+$pluginIds = @{}
 foreach ($section in $pluginSections) {
     $record = $catalogSections[$section]
-    Test-BundleRecord $section $record
+    Test-BundleRecord $section $record Child
+    $normalizedId = $record.Id.ToLowerInvariant()
+    if ($pluginIds.ContainsKey($normalizedId)) {
+        throw "Duplicate child Id: $($record.Id)"
+    }
+    $pluginIds[$normalizedId] = $section
     if ($upgradeCodes.ContainsKey($record.UpgradeCode)) {
         throw "Duplicate child UpgradeCode: $($record.UpgradeCode)"
     }
@@ -184,7 +249,10 @@ $managerRecord = $managerSections[$managerSection]
 if ($managerRecord.Id -ne 'companypluginmanager') {
     throw 'manager.ini must contain only companypluginmanager'
 }
-Test-BundleRecord $managerSection $managerRecord
+Test-BundleRecord $managerSection $managerRecord Manager
+if ($upgradeCodes.ContainsKey($managerRecord.UpgradeCode)) {
+    throw 'The manager UpgradeCode duplicates a child plug-in UpgradeCode'
+}
 
 Write-Output (
     "Verified $($pluginSections.Count) child bundles and 1 manager update bundle " +
