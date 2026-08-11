@@ -71,13 +71,37 @@ function ConvertFrom-CpmIniLines {
     return $sections
 }
 
+function Get-CpmIniFileText {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        return [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+    }
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return [Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+    }
+
+    # Prefer strict UTF-8 for BOM-less files (Max getINISetting needs UTF-16 on disk,
+    # but older catalogs may still be UTF-8). Fall back to system ANSI/GBK.
+    try {
+        $utf8Strict = [Text.UTF8Encoding]::new($false, $true)
+        return $utf8Strict.GetString($bytes)
+    }
+    catch {
+        return [Text.Encoding]::Default.GetString($bytes)
+    }
+}
+
 function Read-CpmIniFile {
     param([Parameter(Mandatory)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Missing INI file: $Path"
     }
-    return ConvertFrom-CpmIniLines -Lines @(Get-Content -LiteralPath $Path)
+    $text = Get-CpmIniFileText -Path $Path
+    $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    return ConvertFrom-CpmIniLines -Lines @($normalized.Split("`n"))
 }
 
 function Copy-CpmIniData {
