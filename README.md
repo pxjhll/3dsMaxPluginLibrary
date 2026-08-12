@@ -87,7 +87,7 @@ tools/repository-policy.json  管理器 ID、标签及仓库目录策略
 默认公司仓库：
 
 ```text
-\\10.15.128.222\角色模型\Tool\3dsMaxPluginLibrary
+\\10.15.129.26\角色模型\Tool\3dsMaxPluginLibrary
 ```
 
 内网发布同样支持 `-RemovePluginIds`、`-PublishManager` 和

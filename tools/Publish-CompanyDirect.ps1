@@ -1,7 +1,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$SourceRepository = 'D:\Tes\MBB\bundle-repository',
-    [string]$CompanyRepository = '\\10.15.128.222\角色模型\Tool\3dsMaxPluginLibrary',
+    [string]$CompanyRepository = '\\10.15.129.26\角色模型\Tool\3dsMaxPluginLibrary',
     [string[]]$PluginIds = @(),
     [string[]]$RemovePluginIds = @(),
     [switch]$PublishManager,
